@@ -1,6 +1,15 @@
-"""种子数据：初始化句子题库"""
+"""句子题库管理工具
+
+用法：
+  python seed.py                    # 初始化种子数据
+  python seed.py --validate         # 验证句子数据完整性
+  python seed.py --import data.json # 从外部 JSON 文件导入
+  python seed.py --stats            # 统计句子库状态
+"""
 from models import init_db, get_db
 import json
+import sys
+import os
 
 SENTENCES = [
     {
@@ -146,14 +155,136 @@ SENTENCES = [
 ]
 
 
+def validate_sentence(s: dict) -> list[str]:
+    """验证单条句子标注的合法性，返回错误列表"""
+    errors = []
+    words = s['content'].split(' ')
+
+    # 必填字段
+    for field in ['content', 'difficulty', 'core_indices', 'tags']:
+        if field not in s:
+            errors.append(f'缺少必填字段: {field}')
+
+    # 难度分级
+    if s.get('difficulty') not in ('简单', '中等', '高考'):
+        errors.append(f"difficulty 必须是'简单'/'中等'/'高考'，当前: {s.get('difficulty')}")
+
+    # core_indices 不越界
+    for idx in s.get('core_indices', []):
+        if idx < 0 or idx >= len(words):
+            errors.append(f'core_indices 索引 {idx} 越界（总词数 {len(words)}）')
+
+    # core_indices 至少保留 2 个词（主谓）
+    if len(s.get('core_indices', [])) < 2:
+        errors.append(f'core_indices 至少保留 2 个词（主语+谓语），当前仅 {len(s.get("core_indices", []))} 个')
+
+    # core_indices 不能包含所有词（全部保留等于没压缩）
+    if len(s.get('core_indices', [])) >= len(words):
+        errors.append(f'core_indices 包含了所有词（{len(words)} 个），无法作为压缩训练')
+
+    # tags 非空
+    if not s.get('tags'):
+        errors.append('tags 不能为空，至少标注一个知识点标签')
+
+    return errors
+
+
+def validate_all(sentences: list[dict]) -> int:
+    """验证所有句子，返回错误数"""
+    total_errors = 0
+    for i, s in enumerate(sentences):
+        errs = validate_sentence(s)
+        if errs:
+            total_errors += len(errs)
+            print(f'  ❌ 句子 #{i + 1} ({s.get("content", "")[:30]}...):')
+            for e in errs:
+                print(f'     - {e}')
+    return total_errors
+
+
+def import_from_json(filepath: str) -> int:
+    """从外部 JSON 文件导入句子（追加模式）"""
+    if not os.path.exists(filepath):
+        print(f'文件不存在: {filepath}')
+        return 0
+
+    with open(filepath, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    if isinstance(data, dict):
+        data = data.get('sentences', [data])
+    if not isinstance(data, list):
+        print('JSON 格式错误：应为数组或包含 sentences 字段的对象')
+        return 0
+
+    # 验证
+    print(f'验证 {len(data)} 条句子...')
+    err_count = validate_all(data)
+    if err_count > 0:
+        print(f'发现 {err_count} 个错误，导入中止')
+        return 0
+
+    # 导入
+    db = get_db()
+    cursor = db.cursor()
+    imported = 0
+    for s in data:
+        cursor.execute(
+            "INSERT INTO sentences (content, difficulty, core_indices, tags, analysis) VALUES (?, ?, ?, ?, ?)",
+            (s['content'], s['difficulty'],
+             json.dumps(s['core_indices'], ensure_ascii=False),
+             json.dumps(s['tags'], ensure_ascii=False),
+             json.dumps(s.get('analysis', {}), ensure_ascii=False))
+        )
+        imported += 1
+
+    db.commit()
+    db.close()
+    print(f'成功导入 {imported} 条句子')
+    return imported
+
+
+def show_stats():
+    """显示句子库统计信息"""
+    db = get_db()
+    cursor = db.cursor()
+
+    total = cursor.execute("SELECT COUNT(*) FROM sentences").fetchone()[0]
+    by_difficulty = cursor.execute(
+        "SELECT difficulty, COUNT(*) FROM sentences GROUP BY difficulty"
+    ).fetchall()
+    all_tags = cursor.execute("SELECT tags FROM sentences").fetchall()
+
+    # 统计知识点标签频率
+    tag_counts = {}
+    for row in all_tags:
+        tags = json.loads(row['tags']) if row['tags'] else []
+        for tag in tags:
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+
+    db.close()
+
+    print(f'📊 句子库统计')
+    print(f'  总计: {total} 句')
+    for d, c in by_difficulty:
+        print(f'  {d}: {c} 句')
+    print(f'  知识点分布:')
+    for tag, count in sorted(tag_counts.items(), key=lambda x: -x[1]):
+        print(f'    {tag}: {count} 句')
+
+
 def seed():
+    """初始化种子数据（清空后重新导入）"""
     init_db()
     db = get_db()
     cursor = db.cursor()
 
-    # 清空旧数据
-    cursor.execute("DELETE FROM sentences")
+    print(f'验证 {len(SENTENCES)} 条种子句子...')
+    err_count = validate_all(SENTENCES)
+    if err_count > 0:
+        print(f'⚠ 种子数据存在 {err_count} 个错误，仍将继续导入')
 
+    cursor.execute("DELETE FROM sentences")
     for s in SENTENCES:
         cursor.execute(
             "INSERT INTO sentences (content, difficulty, core_indices, tags, analysis) VALUES (?, ?, ?, ?, ?)",
@@ -166,8 +297,28 @@ def seed():
     db.commit()
     count = cursor.execute("SELECT COUNT(*) FROM sentences").fetchone()[0]
     db.close()
-    print(f'种子数据初始化完成，共 {count} 条句子')
+    print(f'✅ 种子数据初始化完成，共 {count} 条句子')
+    show_stats()
 
 
 if __name__ == '__main__':
-    seed()
+    if '--validate' in sys.argv:
+        print('验证种子数据...')
+        err_count = validate_all(SENTENCES)
+        if err_count == 0:
+            print('✅ 所有句子验证通过')
+        else:
+            print(f'❌ 发现 {err_count} 个错误')
+
+    elif '--import' in sys.argv:
+        idx = sys.argv.index('--import')
+        if idx + 1 < len(sys.argv):
+            import_from_json(sys.argv[idx + 1])
+        else:
+            print('请指定 JSON 文件路径')
+
+    elif '--stats' in sys.argv:
+        show_stats()
+
+    else:
+        seed()
