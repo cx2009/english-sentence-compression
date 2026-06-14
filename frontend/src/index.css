@@ -1,0 +1,80 @@
+@import "tailwindcss";
+
+/* 设计规范：PRD §14 视觉设计规范 */
+@theme {
+  --color-primary: #2563EB;
+  --color-success: #16A34A;
+  --color-error: #DC2626;
+  --color-warning: #FACC15;
+  --color-deleted: #9CA3AF;
+  --color-text: #1F2937;
+  --color-bg: #F9FAFB;
+  --color-card: #FFFFFF;
+}
+
+/* 基础重置 */
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+#root {
+  min-height: 100svh;
+  max-width: 430px;
+  margin: 0 auto;
+  background: var(--color-card);
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.05);
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* 点击词交互样式 */
+.word-token {
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-block;
+  padding: 2px 1px;
+  border-radius: 3px;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.word-token:active {
+  transform: scale(0.95);
+}
+
+.word-token.deleted {
+  color: var(--color-deleted);
+  text-decoration: line-through;
+  text-decoration-color: var(--color-deleted);
+}
+
+/* 对比页三色高亮 */
+.word-correct-delete {
+  color: var(--color-success);
+  text-decoration: line-through;
+}
+
+.word-false-delete {
+  color: var(--color-error);
+  text-decoration: line-through;
+  text-decoration-color: var(--color-error);
+}
+
+.word-missed-delete {
+  color: var(--color-warning);
+  background-color: rgba(250, 204, 21, 0.15);
+}
+
+/* 安全区适配 */
+.safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 16px);
+}
+
+.safe-area-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
